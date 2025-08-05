@@ -1,30 +1,40 @@
 import requests
 from bs4 import BeautifulSoup
-import re
-from collections import Counter
+from collections import defaultdict
 from janome.tokenizer import Tokenizer, Token
 import time
+import csv
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import sys
 
 # 形態素解析器
 tokenizer = Tokenizer()
 
+BASE_URL = "https://bestcarweb.jp/news/scoop/"
+MAX_WORKERS = 20  # i7-14700Kなら20でフル稼働
 
-def scrape_article(url):
-    """記事本文を取得"""
+
+def scrape_article(article_id):
+    """記事を取得し、(記事ID, 単語リスト)を返す"""
+    url = f"{BASE_URL}{article_id}"
     try:
         res = requests.get(url, timeout=10)
+        if res.status_code == 404:
+            return None  # 記事が存在しない
         res.raise_for_status()
-        soup = BeautifulSoup(res.text, "html.parser")
 
-        # 記事本文抽出
+        soup = BeautifulSoup(res.text, "html.parser")
         article = soup.find("div", class_="article-body")
         if not article:
-            return ""
+            return None
+
         text = article.get_text(separator=" ", strip=True)
-        return text
+        words = extract_words(text)
+        return article_id, words
+
     except Exception as e:
         print(f"Error fetching {url}: {e}")
-        return ""
+        return None
 
 
 def extract_words(text: str) -> list[str]:
@@ -36,24 +46,43 @@ def extract_words(text: str) -> list[str]:
     return words
 
 
-def main():
-    base_url = "https://bestcarweb.jp/news/scoop/"
-    word_counter = Counter()
+def main(start_id, end_id):
+    word_occurrences = defaultdict(list)
 
-    # 範囲を指定（テスト用に1〜10）
-    for i in range(1, 11):  # 本番は 1〜1284454
-        url = f"{base_url}{i}/"
-        print(f"Fetching {url} ...")
-        text = scrape_article(url)
-        if text:
-            words = extract_words(text)
-            word_counter.update(words)
-        time.sleep(1)  # サーバー負荷軽減のためウェイト
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = [
+            executor.submit(scrape_article, i) for i in range(start_id, end_id + 1)
+        ]
 
-    # 上位30単語を表示
-    for word, count in word_counter.most_common(30):
-        print(word, count)
+        for future in as_completed(futures):
+            result = future.result()
+            if result:
+                article_id, words = result
+                url = f"{BASE_URL}{article_id}"
+                for word in set(words):  # 記事内で重複除外
+                    word_occurrences[word].append(url)
+
+    # CSV書き出し
+    filename = f"word_occurrences_{start_id}_{end_id}.csv"
+    with open(filename, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["単語", "出現回数", "記事URL"])
+        for word, urls in sorted(
+            word_occurrences.items(), key=lambda x: len(x[1]), reverse=True
+        ):
+            writer.writerow([word, len(urls), ", ".join(urls)])
+
+    print(f"CSV出力完了: {filename}")
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) != 3:
+        print("使い方: python main.py <START_ID> <END_ID>")
+        sys.exit(1)
+
+    start_id = int(sys.argv[1])
+    end_id = int(sys.argv[2])
+
+    start_time = time.time()
+    main(start_id, end_id)
+    print(f"処理時間: {time.time() - start_time:.2f}秒")
