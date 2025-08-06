@@ -1,50 +1,17 @@
-import requests
+import os
 from bs4 import BeautifulSoup
 from collections import defaultdict
 from janome.tokenizer import Tokenizer, Token
-import time
 import csv
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import sys
-import warnings
-from bs4 import XMLParsedAsHTMLWarning
-
-# 警告を無視（lxml使用でも保険）
-warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+from tqdm import tqdm
 
 # 形態素解析器
 tokenizer = Tokenizer()
 
-BASE_URL = "https://bestcarweb.jp/news/scoop/"
-MAX_WORKERS = 20  # i7-14700Kなら20でフル稼働
-REQUEST_WAIT = 0.2  # サーバーに優しくするためのウェイト
-
-
-def scrape_article(article_id):
-    """記事を取得し、(記事ID, 単語リスト)を返す"""
-    url = f"{BASE_URL}{article_id}"
-    try:
-        res = requests.get(url, timeout=10)
-        if res.status_code == 404:
-            return None  # 記事が存在しない
-        elif res.status_code == 500:
-            print(f"500 Error: {url} → スキップ")
-            return None
-
-        res.raise_for_status()
-
-        soup = BeautifulSoup(res.text, "lxml")  # ← ここをlxmlに変更
-        article = soup.find("div", class_="article-body")
-        if not article:
-            return None
-
-        text = article.get_text(separator=" ", strip=True)
-        words = extract_words(text)
-        return article_id, words
-
-    except Exception as e:
-        print(f"Error fetching {url}: {e}")
-        return None
+DOWNLOAD_DIR = "download"  # HTML保存フォルダ
+MAX_WORKERS = 20  # スレッド数（CPUコア数に応じて調整）
 
 
 def extract_words(text: str) -> list[str]:
@@ -56,44 +23,53 @@ def extract_words(text: str) -> list[str]:
     return words
 
 
-def main(start_id, end_id):
+def parse_html_file(file_name: str):
+    """1つのHTMLファイルを解析して(単語, ファイルパス)のマッピングを返す"""
+    file_path = os.path.join(DOWNLOAD_DIR, file_name)
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            soup = BeautifulSoup(f, "lxml")
+            article = soup.find("div", class_="article-body")
+            if not article:
+                return None
+
+            text = article.get_text(separator=" ", strip=True)
+            words = extract_words(text)
+            return file_path, set(words)  # 重複排除した単語
+    except Exception as e:
+        print(f"Error parsing {file_name}: {e}")
+        return None
+
+
+def main():
+    start_time = time.time()
     word_occurrences = defaultdict(list)
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [
-            executor.submit(scrape_article, i) for i in range(start_id, end_id + 1)
-        ]
+    html_files = [f for f in os.listdir(DOWNLOAD_DIR) if f.endswith(".html")]
 
-        for future in as_completed(futures):
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = [executor.submit(parse_html_file, file) for file in html_files]
+
+        for future in tqdm(as_completed(futures), total=len(futures), desc="解析中"):
             result = future.result()
             if result:
-                article_id, words = result
-                url = f"{BASE_URL}{article_id}"
-                for word in set(words):  # 記事内で重複除外
-                    word_occurrences[word].append(url)
-            time.sleep(REQUEST_WAIT)  # ← ここでサーバーへの負荷を軽減
+                file_path, words = result
+                for word in words:
+                    word_occurrences[word].append(file_path)
 
     # CSV書き出し
-    filename = f"word_occurrences_{start_id}_{end_id}.csv"
+    filename = "word_occurrences_local.csv"
     with open(filename, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
-        writer.writerow(["単語", "出現回数", "記事URL"])
-        for word, urls in sorted(
+        writer.writerow(["単語", "出現回数", "ファイルパス"])
+        for word, paths in sorted(
             word_occurrences.items(), key=lambda x: len(x[1]), reverse=True
         ):
-            writer.writerow([word, len(urls), ", ".join(urls)])
+            writer.writerow([word, len(paths), ", ".join(paths)])
 
     print(f"CSV出力完了: {filename}")
+    print(f"処理時間: {time.time() - start_time:.2f}秒")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("使い方: python main.py <START_ID> <END_ID>")
-        sys.exit(1)
-
-    start_id = int(sys.argv[1])
-    end_id = int(sys.argv[2])
-
-    start_time = time.time()
-    main(start_id, end_id)
-    print(f"処理時間: {time.time() - start_time:.2f}秒")
+    main()
