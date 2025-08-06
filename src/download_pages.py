@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # === 設定 ===
 BASE_URL = "https://bestcarweb.jp/news/scoop/"
-MAX_WORKERS = 10  # 並列スレッド数
+MAX_WORKERS = 20  # 並列スレッド数
 DOWNLOAD_DIR = "download"  # ダウンロード先フォルダ
 WAIT_BETWEEN_REQUESTS = 0.2  # サーバー負荷軽減
 
