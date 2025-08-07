@@ -11,7 +11,7 @@ from tqdm import tqdm
 tokenizer = Tokenizer()
 
 DOWNLOAD_DIR = "download"  # HTML保存フォルダ
-MAX_WORKERS = 20  # スレッド数（CPUコア数に応じて調整）
+MAX_WORKERS = 40  # スレッド数（CPUコア数に応じて調整）
 
 
 def extract_words(text: str) -> list[str]:
