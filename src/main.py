@@ -11,7 +11,24 @@ from tqdm import tqdm
 tokenizer = Tokenizer()
 
 DOWNLOAD_DIR = "download"  # HTML保存フォルダ
-MAX_WORKERS = 40  # スレッド数（CPUコア数に応じて調整）
+MAX_WORKERS = 40  # スレッド数
+
+# 本文候補セレクタ
+CONTENT_SELECTORS = [
+    ("div", {"class": "article__content"}),  # 新テーマ
+    ("div", {"class": "article-body"}),  # 旧テーマ
+    ("div", {"class": "entry-content"}),  # WP汎用
+]
+
+
+def pick_article(soup: BeautifulSoup):
+    for name, attrs in CONTENT_SELECTORS:
+        el = soup.find(name, attrs=attrs)
+        if el and el.get_text(strip=True):
+            return el
+    # 念のため最後の保険
+    el = soup.select_one("article, main")
+    return el if el and el.get_text(strip=True) else None
 
 
 def extract_words(text: str) -> list[str]:
@@ -24,20 +41,42 @@ def extract_words(text: str) -> list[str]:
 
 
 def parse_html_file(file_name: str):
-    """1つのHTMLファイルを解析して(単語, ファイルパス)のマッピングを返す"""
     file_path = os.path.join(DOWNLOAD_DIR, file_name)
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            soup = BeautifulSoup(f, "lxml")
-            article = soup.find("div", class_="article-body")
-            if not article:
+        # バイナリ先頭チェックで画像やPDFを弾く
+        with open(file_path, "rb") as fb:
+            head = fb.read(2048)
+            if b"\xff\xd8" in head or b"\x89PNG" in head or b"%PDF" in head:
+                print(f"[BIN] Not HTML: {file_name}")
                 return None
+            fb.seek(0)
+            raw = fb.read()
 
-            text = article.get_text(separator=" ", strip=True)
-            words = extract_words(text)
-            return file_path, set(words)  # 重複排除した単語
+        soup = None
+        # lxml優先 → ダメなら標準パーサ
+        for parser in ("lxml", "html.parser"):
+            try:
+                soup = BeautifulSoup(raw, parser)
+                break
+            except Exception as e:
+                print(f"[WARN] Parser fail {parser}: {file_name} → {e}")
+
+        if soup is None:
+            print(f"[SKIP] No parser usable: {file_name}")
+            return None
+
+        article = pick_article(soup)
+        if not article:
+            print(f"[SKIP] No article-content: {file_name}")
+            return None
+
+        text = article.get_text(separator=" ", strip=True)
+        words = extract_words(text)
+        print(f"[OK] Parsed: {file_name} → {len(words)} tokens")
+        return file_path, set(words)  # 同一記事内は重複排除
+
     except Exception as e:
-        print(f"Error parsing {file_name}: {e}")
+        print(f"[ERROR] {file_name}: {e}")
         return None
 
 
