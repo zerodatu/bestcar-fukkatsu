@@ -18,17 +18,43 @@ CONTENT_SELECTORS = [
     ("div", {"class": "article__content"}),  # 新テーマ
     ("div", {"class": "article-body"}),  # 旧テーマ
     ("div", {"class": "entry-content"}),  # WP汎用
+    ("div", {"itemprop": "articleBody"}),  # schema.org
 ]
 
 
 def pick_article(soup: BeautifulSoup):
+    # 1) <article> タグ優先で探す
+    art = soup.find("article")
+    if art and art.get_text(strip=True):
+        # <article> 内の特定クラス
+        for sel in CONTENT_SELECTORS:
+            el = art.find(*sel)
+            if el and el.get_text(strip=True):
+                return el
+        # 段落が多い場合は <article> 全体を本文とみなす
+        if len(art.find_all("p")) >= 3:
+            return art
+
+    # 2) グローバル検索
     for name, attrs in CONTENT_SELECTORS:
         el = soup.find(name, attrs=attrs)
         if el and el.get_text(strip=True):
             return el
-    # 念のため最後の保険
-    el = soup.select_one("article, main")
-    return el if el and el.get_text(strip=True) else None
+
+    # 3) さらに保険 (article, main, itemprop)
+    el = soup.select_one('[itemprop="articleBody"], main, article')
+    if el and el.get_text(strip=True):
+        return el
+
+    # 4) 最後のヒューリスティック
+    best = None
+    best_p = 0
+    for div in soup.find_all("div"):
+        p_cnt = len(div.find_all("p"))
+        if p_cnt >= 5 and p_cnt > best_p and len(div.get_text(strip=True)) > 300:
+            best = div
+            best_p = p_cnt
+    return best
 
 
 def extract_words(text: str) -> list[str]:
