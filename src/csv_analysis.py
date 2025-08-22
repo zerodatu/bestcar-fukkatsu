@@ -6,7 +6,7 @@ import japanize_matplotlib
 # --- 定数定義 ---
 CSV_FILE_PATH = 'word_occurrences_local.csv'
 OUTPUT_IMAGE_PATH = 'word_frequency_graph.png'
-TOP_N = 30  # 上位何件をグラフ化するか
+TOP_N = 50  # 上位何件をグラフ化するか
 
 def create_word_frequency_graph(csv_path: str, output_path: str, top_n: int):
     """
